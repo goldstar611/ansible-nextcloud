@@ -1,0 +1,140 @@
+---
+- name: My first play
+
+  hosts:
+    - proxmox-container
+
+  vars:
+    new_installation: false
+
+  tasks:
+    - name: Ping my hosts
+      ansible.builtin.ping:
+
+    - name: Print message
+      ansible.builtin.debug:
+        msg: Hello world
+
+    - name: Update installed packages to latest version
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+
+    - name: Install packages
+      ansible.builtin.dnf:
+        name:
+          - nginx
+          - unzip
+          - gpg
+        state: latest
+  
+    - name: Start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    # https://docs.nextcloud.com/server/latest/admin_manual/installation/example_centos.html
+    - name: Install Nextcloud dependencies
+      ansible.builtin.dnf:
+        name:
+          - php-cli
+          - php-intl
+          - php-pecl-apcu
+          - php-opcache
+          - php-json
+          - php-zip
+          - php-redis
+          - php-imagick
+          - php
+          - php-fpm
+          - php-mysqlnd
+          - php-gd
+          - php-curl
+          - php-xml
+          - php-mbstring
+          - redis
+        state: latest
+
+    - name: Fix php-fpm configuration (user)
+      ansible.builtin.lineinfile:
+        path: /etc/php-fpm.d/www.conf
+        regexp: '^user ='
+        line: 'user = nginx'
+
+    - name: Fix php-fpm configuration (group)
+      ansible.builtin.lineinfile:
+        path: /etc/php-fpm.d/www.conf
+        regexp: '^group ='
+        line: 'group = nginx'
+
+    - name: Fix php-fpm configuration (listen owner)
+      ansible.builtin.lineinfile:
+        path: /etc/php-fpm.d/www.conf
+        regexp: '^;?listen.owner ='
+        line: 'listen.owner = nginx'
+
+    - name: Fix php-fpm configuration (listen group)
+      ansible.builtin.lineinfile:
+        path: /etc/php-fpm.d/www.conf
+        regexp: '^;?listen.group ='
+        line: 'listen.group = nginx'
+
+    - name: Fix php-fpm configuration (listen mode)
+      ansible.builtin.lineinfile:
+        path: /etc/php-fpm.d/www.conf
+        regexp: '^;?listen.mode ='
+        line: 'listen.mode = 0666'
+
+    - name: Restart php-fpm
+      ansible.builtin.service:
+        name: php-fpm
+        state: restarted
+        enabled: true
+
+    - name: Start redis
+      ansible.builtin.service:
+        name: redis
+        state: started
+        enabled: true
+
+    - name: Create /var/www/html directory
+      ansible.builtin.file:
+        path: /var/www/html
+        state: directory
+        mode: '0755'
+
+    - name: Download Nextcloud
+      ansible.builtin.get_url:
+        url: https://download.nextcloud.com/server/releases/latest.zip
+        dest: /tmp/nextcloud-latest.zip
+
+    - name: Download Nextcloud GPG signature
+      ansible.builtin.get_url:
+        url: https://download.nextcloud.com/server/releases/latest.zip.asc
+        dest: /tmp/nextcloud-latest.zip.asc
+
+    - name: Import Nextcloud GPG key
+      ansible.builtin.command:
+        cmd: gpg --keyserver keyserver.ubuntu.com --recv-keys 28806A878AE423A28372792ED75899B9A724937A
+
+    - name: Verify Nextcloud download
+      ansible.builtin.command:
+        cmd: gpg --verify /tmp/nextcloud-latest.zip.asc /tmp/nextcloud-latest.zip
+        chdir: /tmp
+
+    - name: Unzip Nextcloud
+      when: new_installation
+      ansible.builtin.unarchive:
+        src: /tmp/nextcloud-latest.zip
+        dest: /var/www/html/
+        remote_src: yes
+
+    - name: Set ownership of Nextcloud files
+      when: new_installation
+      ansible.builtin.file:
+        path: /var/www/html/nextcloud
+        owner: nginx
+        group: nginx
+        recurse: yes
