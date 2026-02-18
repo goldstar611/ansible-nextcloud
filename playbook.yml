@@ -5,6 +5,8 @@
     - proxmox-container
 
   vars:
+    hostname: nextcloud
+    qdn: homelab
     new_installation: false
 
   tasks:
@@ -14,6 +16,20 @@
     - name: Print message
       ansible.builtin.debug:
         msg: Hello world
+
+    - name: Update /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ hostname }} {{ hostname }}.{{ qdn }}"
+        create: yes
+
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ hostname }}"
+
+    - name: Set timezone
+      ansible.builtin.timezone:
+        name: "America/Chicago"
 
     - name: Update installed packages to latest version
       ansible.builtin.dnf:
@@ -27,6 +43,8 @@
           - nginx
           - unzip
           - gpg
+          - certbot
+          - python3-certbot-nginx
         state: latest
   
     - name: Start nginx
@@ -34,6 +52,21 @@
         name: nginx
         state: started
         enabled: true
+
+    - name: Download and install smallstep root ca
+      ansible.builtin.get_url:
+        validate_certs: false
+        url: https://smallstep.homelab/roots.pem
+        dest: /etc/pki/ca-trust/source/anchors/smallstep-ca.crt
+
+    - name: Update CA trust
+      ansible.builtin.command:
+        cmd: update-ca-trust
+
+    - name: Get certbot certificate
+      # Note: No trailing slash in server URL
+      ansible.builtin.command:
+        cmd: certbot certonly --server https://smallstep.homelab/acme/acme/directory --nginx -d {{ hostname }} -d {{ hostname }}.{{ qdn }} --non-interactive --agree-tos -m admin@homelab
 
     # https://docs.nextcloud.com/server/latest/admin_manual/installation/example_centos.html
     - name: Install Nextcloud dependencies
@@ -57,31 +90,45 @@
           - redis
         state: latest
 
+    - name: Set user in nginx.conf to apache
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: '^user nginx;'
+        line: 'user apache;'
+
+    - name: Restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+        enabled: true
+
     - name: Fix php-fpm configuration (user)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^user ='
-        line: 'user = nginx'
+        line: 'user = apache'
 
     - name: Fix php-fpm configuration (group)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^group ='
-        line: 'group = nginx'
+        line: 'group = apache'
 
     - name: Fix php-fpm configuration (listen owner)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^;?listen.owner ='
-        line: 'listen.owner = nginx'
+        line: 'listen.owner = apache'
 
     - name: Fix php-fpm configuration (listen group)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^;?listen.group ='
-        line: 'listen.group = nginx'
+        line: 'listen.group = apache'
 
     - name: Fix php-fpm configuration (listen mode)
+      # listen owner/group settings doesn't see to take effect,
+      # so we set listen mode to 0666 to allow nginx to access the socket
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^;?listen.mode ='
@@ -135,6 +182,6 @@
       when: new_installation
       ansible.builtin.file:
         path: /var/www/html/nextcloud
-        owner: nginx
-        group: nginx
+        owner: apache
+        group: apache
         recurse: yes
