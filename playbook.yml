@@ -45,8 +45,24 @@
           - gpg
           - certbot
           - python3-certbot-nginx
+          - nftables
+          - wireguard-tools
         state: latest
   
+    - name: Copy nftables configuration
+      ansible.builtin.copy:
+        src: ./files/nftables.conf
+        dest: /etc/sysconfig/nftables.conf
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start/restart nftables
+      ansible.builtin.service:
+        name: nftables
+        state: restarted
+        enabled: true
+
     - name: Copy nginx configuration
       ansible.builtin.copy:
         src: ./files/nginx.conf
