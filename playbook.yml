@@ -47,6 +47,14 @@
           - python3-certbot-nginx
         state: latest
   
+    - name: Copy nginx configuration
+      ansible.builtin.copy:
+        src: ./files/nginx.conf
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Start nginx
       ansible.builtin.service:
         name: nginx
@@ -152,36 +160,37 @@
         state: directory
         mode: '0755'
 
-    - name: Download Nextcloud
-      ansible.builtin.get_url:
-        url: https://download.nextcloud.com/server/releases/latest.zip
-        dest: /tmp/nextcloud-latest.zip
-
-    - name: Download Nextcloud GPG signature
-      ansible.builtin.get_url:
-        url: https://download.nextcloud.com/server/releases/latest.zip.asc
-        dest: /tmp/nextcloud-latest.zip.asc
-
-    - name: Import Nextcloud GPG key
-      ansible.builtin.command:
-        cmd: gpg --keyserver keyserver.ubuntu.com --recv-keys 28806A878AE423A28372792ED75899B9A724937A
-
-    - name: Verify Nextcloud download
-      ansible.builtin.command:
-        cmd: gpg --verify /tmp/nextcloud-latest.zip.asc /tmp/nextcloud-latest.zip
-        chdir: /tmp
-
-    - name: Unzip Nextcloud
+    - name: When new installation
       when: new_installation
-      ansible.builtin.unarchive:
-        src: /tmp/nextcloud-latest.zip
-        dest: /var/www/html/
-        remote_src: yes
+      block:
+      - name: Download Nextcloud
+        ansible.builtin.get_url:
+          url: https://download.nextcloud.com/server/releases/latest.zip
+          dest: /tmp/nextcloud-latest.zip
 
-    - name: Set ownership of Nextcloud files
-      when: new_installation
-      ansible.builtin.file:
-        path: /var/www/html/nextcloud
-        owner: apache
-        group: apache
-        recurse: yes
+      - name: Download Nextcloud GPG signature
+        ansible.builtin.get_url:
+          url: https://download.nextcloud.com/server/releases/latest.zip.asc
+          dest: /tmp/nextcloud-latest.zip.asc
+
+      - name: Import Nextcloud GPG key
+        ansible.builtin.command:
+          cmd: gpg --keyserver keyserver.ubuntu.com --recv-keys 28806A878AE423A28372792ED75899B9A724937A
+
+      - name: Verify Nextcloud download
+        ansible.builtin.command:
+          cmd: gpg --verify /tmp/nextcloud-latest.zip.asc /tmp/nextcloud-latest.zip
+          chdir: /tmp
+
+      - name: Unzip Nextcloud
+        ansible.builtin.unarchive:
+          src: /tmp/nextcloud-latest.zip
+          dest: /var/www/html/
+          remote_src: yes
+
+      - name: Set ownership of Nextcloud files
+        ansible.builtin.file:
+          path: /var/www/html/nextcloud
+          owner: apache
+          group: apache
+          recurse: yes
