@@ -9,6 +9,19 @@
     qdn: homelab
     new_installation: false
 
+  handlers:
+    - name: Reload wireguard configuration
+      become: true
+      ansible.builtin.service:
+        name: wg-quick@wg0.service
+        state: reloaded
+
+    - name: Restart nftables
+      ansible.builtin.service:
+        name: nftables
+        state: restarted
+        enabled: true
+
   tasks:
     - name: Ping my hosts
       ansible.builtin.ping:
@@ -31,10 +44,8 @@
       ansible.builtin.timezone:
         name: "America/Chicago"
 
-    - name: Update installed packages to latest version
+    - name: Update dnf package cache
       ansible.builtin.dnf:
-        name: "*"
-        state: latest
         update_cache: true
 
     - name: Install packages
@@ -49,19 +60,30 @@
           - wireguard-tools
         state: latest
   
+    - name: Copy wireguard configuration
+      ansible.builtin.template:
+        dest: /etc/wireguard/wg0.conf
+        src: ./files/wg0.conf
+        owner: root
+        group: root
+        mode: '0600'
+      notify:
+        - Reload wireguard configuration
+
+    - name: Start wireguard
+      ansible.builtin.service:
+        name: wg-quick@wg0.service
+        state: started
+        enabled: true
+
     - name: Copy nftables configuration
+      notify: Restart nftables
       ansible.builtin.copy:
         src: ./files/nftables.conf
         dest: /etc/sysconfig/nftables.conf
         owner: root
         group: root
         mode: '0755'
-
-    - name: Start/restart nftables
-      ansible.builtin.service:
-        name: nftables
-        state: restarted
-        enabled: true
 
     - name: Copy nginx configuration
       ansible.builtin.copy:
@@ -84,11 +106,15 @@
         dest: /etc/pki/ca-trust/source/anchors/smallstep-ca.crt
 
     - name: Update CA trust
+      changed_when: "'' != update_ca_trust_result.stdout"
+      register: update_ca_trust_result
       ansible.builtin.command:
         cmd: update-ca-trust
 
     - name: Get certbot certificate
       # Note: No trailing slash in server URL
+      changed_when: "'no action taken' not in certbot_result.stdout"
+      register: certbot_result
       ansible.builtin.command:
         cmd: certbot certonly --server https://smallstep.homelab/acme/acme/directory --nginx -d {{ hostname }} -d {{ hostname }}.{{ qdn }} --non-interactive --agree-tos -m admin@homelab
 
