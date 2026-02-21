@@ -3,6 +3,6 @@ ungrouped:
     localhost:
       ansible_connection: local
     proxmox-container:
-      ansible_host: 192.168.4.115
+      ansible_host: 192.168.4.139
       ansible_user: root
       #ansible_ssh_pass: password

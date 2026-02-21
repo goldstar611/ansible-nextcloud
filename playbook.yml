@@ -7,7 +7,8 @@
   vars:
     hostname: nextcloud
     qdn: homelab
-    new_installation: false
+    upgrade_installation: false
+    www_data_user: nginx
 
   handlers:
     - name: Reload wireguard configuration
@@ -15,12 +16,12 @@
       ansible.builtin.service:
         name: wg-quick@wg0.service
         state: reloaded
-
-    - name: Restart nftables
+    
+    - name: Restart php-fpm
+      become: true
       ansible.builtin.service:
-        name: nftables
+        name: php-fpm
         state: restarted
-        enabled: true
 
   tasks:
     - name: Ping my hosts
@@ -43,6 +44,22 @@
     - name: Set timezone
       ansible.builtin.timezone:
         name: "America/Chicago"
+
+    - name: Copy nftables configuration
+      # Need to apply updated rules immediately if it prevents other tasks from completing
+      #notify: Restart nftables
+      ansible.builtin.copy:
+        src: ./files/nftables.conf
+        dest: /etc/sysconfig/nftables.conf
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Restart nftables
+      ansible.builtin.service:
+        name: nftables
+        state: restarted
+        enabled: true
 
     - name: Update dnf package cache
       ansible.builtin.dnf:
@@ -70,34 +87,11 @@
       notify:
         - Reload wireguard configuration
 
-    - name: Start wireguard
-      ansible.builtin.service:
-        name: wg-quick@wg0.service
-        state: started
-        enabled: true
-
-    - name: Copy nftables configuration
-      notify: Restart nftables
-      ansible.builtin.copy:
-        src: ./files/nftables.conf
-        dest: /etc/sysconfig/nftables.conf
-        owner: root
-        group: root
-        mode: '0755'
-
-    - name: Copy nginx configuration
-      ansible.builtin.copy:
-        src: ./files/nginx.conf
-        dest: /etc/nginx/nginx.conf
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Start nginx
-      ansible.builtin.service:
-        name: nginx
-        state: started
-        enabled: true
+    #- name: Start wireguard
+    #  ansible.builtin.service:
+    #    name: wg-quick@wg0.service
+    #    state: started
+    #    enabled: true
 
     - name: Download and install smallstep root ca
       ansible.builtin.get_url:
@@ -111,12 +105,50 @@
       ansible.builtin.command:
         cmd: update-ca-trust
 
+    - name: Create /var/www/html directory
+      ansible.builtin.file:
+        path: /var/www/html
+        state: directory
+        mode: '0755'
+
+    - name: Check if /var/www/html/nextcloud directory exists
+      ansible.builtin.stat:
+        path: /var/www/html/nextcloud
+      register: nextcloud_dir
+
+    - set_fact:
+        upgrade_installation: true
+      when: not nextcloud_dir.stat.exists
+
+    - name: Create /var/www/html/nextcloud directory
+      ansible.builtin.file:
+        path: /var/www/html/nextcloud
+        state: directory
+        mode: '0755'
+        owner: "{{ www_data_user }}"
+        group: "{{ www_data_user }}"
+
+    # On first deployment, need nginx to be started with default configuration to be able to get certbot certificate
+    - name: Start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
     - name: Get certbot certificate
       # Note: No trailing slash in server URL
       changed_when: "'no action taken' not in certbot_result.stdout"
       register: certbot_result
       ansible.builtin.command:
         cmd: certbot certonly --server https://smallstep.homelab/acme/acme/directory --nginx -d {{ hostname }} -d {{ hostname }}.{{ qdn }} --non-interactive --agree-tos -m admin@homelab
+
+    - name: Update nginx configuration
+      ansible.builtin.template:
+        src: ./files/nginx.conf
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
 
     # https://docs.nextcloud.com/server/latest/admin_manual/installation/example_centos.html
     - name: Install Nextcloud dependencies
@@ -130,9 +162,12 @@
           - php-zip
           - php-redis
           - php-imagick
-          - php
+          # The `php` package depends on `httpd` which conflicts with `nginx`
+          #- php
+          - php-pdo
+          - php-sodium
+          #
           - php-fpm
-          - php-mysqlnd
           - php-gd
           - php-curl
           - php-xml
@@ -140,41 +175,50 @@
           - redis
         state: latest
 
-    - name: Set user in nginx.conf to apache
-      ansible.builtin.lineinfile:
-        path: /etc/nginx/nginx.conf
-        regexp: '^user nginx;'
-        line: 'user apache;'
+    - name: Update permissions for /var/lib/php/session
+      ansible.builtin.file:
+        path: /var/lib/php/session
+        state: directory
+        owner: root
+        group: "{{ www_data_user }}"
 
-    - name: Restart nginx
-      ansible.builtin.service:
-        name: nginx
-        state: restarted
-        enabled: true
+    - name: Update permissions for /var/lib/php/opcache
+      ansible.builtin.file:
+        path: /var/lib/php/opcache
+        state: directory
+        owner: root
+        group: "{{ www_data_user }}"
+
+    - name: Update permissions for /var/lib/php/wsdlcache
+      ansible.builtin.file:
+        path: /var/lib/php/wsdlcache
+        state: directory
+        owner: root
+        group: "{{ www_data_user }}"
 
     - name: Fix php-fpm configuration (user)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^user ='
-        line: 'user = apache'
+        line: 'user = {{ www_data_user }}'
 
     - name: Fix php-fpm configuration (group)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
         regexp: '^group ='
-        line: 'group = apache'
+        line: 'group = {{ www_data_user }}'
 
     - name: Fix php-fpm configuration (listen owner)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
-        regexp: '^;?listen.owner ='
-        line: 'listen.owner = apache'
+        regexp: '^;?listen.owner = '
+        line: 'listen.owner = {{ www_data_user }}'
 
     - name: Fix php-fpm configuration (listen group)
       ansible.builtin.lineinfile:
         path: /etc/php-fpm.d/www.conf
-        regexp: '^;?listen.group ='
-        line: 'listen.group = apache'
+        regexp: '^;?listen.group = '
+        line: 'listen.group = {{ www_data_user }}'
 
     - name: Fix php-fpm configuration (listen mode)
       # listen owner/group settings doesn't see to take effect,
@@ -196,14 +240,8 @@
         state: started
         enabled: true
 
-    - name: Create /var/www/html directory
-      ansible.builtin.file:
-        path: /var/www/html
-        state: directory
-        mode: '0755'
-
-    - name: When new installation
-      when: new_installation
+    - name: When its time to upgrade nextcloud...
+      when: upgrade_installation
       block:
       - name: Download Nextcloud
         ansible.builtin.get_url:
@@ -229,10 +267,5 @@
           src: /tmp/nextcloud-latest.zip
           dest: /var/www/html/
           remote_src: yes
-
-      - name: Set ownership of Nextcloud files
-        ansible.builtin.file:
-          path: /var/www/html/nextcloud
-          owner: apache
-          group: apache
-          recurse: yes
+          owner: "{{ www_data_user }}"
+          group: "{{ www_data_user }}"
